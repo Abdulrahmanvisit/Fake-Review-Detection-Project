@@ -2,18 +2,17 @@ import re
 from typing import List
 
 
-# ================================================================
-# KNOWN SINGLE-WORD ASPECTS
-# ================================================================
+# ---------------------------------------------------------------------------
+# Controlled Aspect Vocabulary
+# ---------------------------------------------------------------------------
 #
-# Only words in this vocabulary can become standalone aspects.
-# This prevents ordinary words such as "book", "case", "brain",
-# "muddy", etc. from automatically becoming aspects.
-#
-# ================================================================
+# The extractor deliberately uses a controlled vocabulary rather than
+# generating arbitrary neighbouring words. This reduces false-positive
+# aspects while still allowing common product/review aspects to be detected.
+# ---------------------------------------------------------------------------
 
 KNOWN_ASPECTS = {
-    # General product characteristics
+    # General product aspects
     "quality",
     "price",
     "cost",
@@ -41,8 +40,12 @@ KNOWN_ASPECTS = {
     "durability",
     "strength",
     "weight",
+    "capacity",
+    "quantity",
+    "availability",
+    "condition",
 
-    # Electronics / devices
+    # Electronics
     "battery",
     "batteries",
     "screen",
@@ -56,23 +59,25 @@ KNOWN_ASPECTS = {
     "speakers",
     "keyboard",
     "mouse",
+    "cursor",
     "computer",
     "laptop",
     "phone",
-    "watch",
-
-    # Product components
-    "button",
+    "charger",
+    "charging",
+    "charge",
     "buttons",
+    "button",
     "strap",
     "straps",
     "handle",
     "handles",
     "cover",
+    "case",
     "box",
     "package",
 
-    # Product functions
+    # Product features
     "alarm",
     "alarms",
     "setting",
@@ -81,17 +86,26 @@ KNOWN_ASPECTS = {
     "functions",
     "feature",
     "features",
+    "threading",
+    "mount",
+    "mounts",
 
     # Clothing
     "shirt",
     "shirts",
+    "polo",
+    "dress",
+    "clothing",
 
-    # Household / kitchen
+    # Household / physical products
     "cutter",
     "mat",
     "mats",
-
-    # Home / decoration
+    "grater",
+    "pillows",
+    "pillow",
+    "seat",
+    "filling",
     "floor",
     "floors",
     "wall",
@@ -103,7 +117,7 @@ KNOWN_ASPECTS = {
     "butterfly",
     "butterflies",
 
-    # Health / beauty
+    # Personal care / beauty
     "skin",
     "cellulite",
     "sensation",
@@ -115,31 +129,17 @@ KNOWN_ASPECTS = {
     "ingredients",
     "circulation",
 
-    # Other useful product properties
+    # Other recognised review/product aspects
     "safety",
     "accuracy",
     "reliability",
-    "capacity",
-    "quantity",
-    "availability",
+    "life",
 }
 
 
-# ================================================================
-# HIGH-CONFIDENCE MULTI-WORD ASPECTS
-# ================================================================
-#
-# These are the ONLY multi-word aspects the extractor will
-# automatically create.
-#
-# We deliberately do NOT create arbitrary phrases such as:
-#
-#     muddy sensation
-#     odd reactions
-#     common settings
-#     different walls
-#
-# ================================================================
+# ---------------------------------------------------------------------------
+# High-Confidence Multi-Word Aspects
+# ---------------------------------------------------------------------------
 
 KNOWN_ASPECT_PHRASES = {
     "battery life",
@@ -151,267 +151,263 @@ KNOWN_ASPECT_PHRASES = {
     "video quality",
     "screen quality",
     "display quality",
-
     "customer service",
     "delivery time",
     "shipping time",
-
     "battery performance",
     "sound performance",
-
     "skin care",
-
     "pizza cutter",
     "tarot cards",
     "polo shirt",
+    "product quality",
+    "product price",
+    "charging time",
+    "battery charger",
 }
 
 
-# ================================================================
-# TEXT CLEANING
-# ================================================================
+# ---------------------------------------------------------------------------
+# Contextual False-Positive Rules
+# ---------------------------------------------------------------------------
+#
+# Some words can be aspects in one context and ordinary words in another.
+#
+# Example:
+#     "The watch has comfortable straps."
+#          -> watch is an aspect.
+#
+#     "I watched this movie."
+#          -> watched/watch is a verb, not a product aspect.
+#
+# The rules below prevent common contextual false positives.
+# ---------------------------------------------------------------------------
+
+CONTEXT_EXCLUSIONS = {
+    "watch": {
+        "watched",
+        "watching",
+        "watch",
+    },
+}
+
+
+# ---------------------------------------------------------------------------
+# Text Cleaning
+# ---------------------------------------------------------------------------
 
 def clean_text(text: str) -> str:
     """
     Clean review text before aspect extraction.
 
-    HTML tags are removed and whitespace is normalised.
+    HTML tags and unnecessary punctuation are removed while preserving
+    normal alphabetic characters and numbers.
     """
-
     if not isinstance(text, str):
         return ""
 
-    # Remove HTML such as <br />, <br><br>, <p>, etc.
+    # Remove HTML tags.
     text = re.sub(
         r"<[^>]+>",
         " ",
         text,
     )
 
-    # Convert text to lowercase.
+    # Decode common HTML entities represented in review text.
+    text = text.replace(
+        "&#34;",
+        '"',
+    )
+
+    text = text.replace(
+        "&quot;",
+        '"',
+    )
+
+    text = text.replace(
+        "&amp;",
+        "and",
+    )
+
     text = text.lower()
 
-    # Keep letters, numbers, apostrophes and spaces.
+    # Keep letters, numbers, spaces and apostrophes.
     text = re.sub(
-        r"[^a-z0-9\s']",
+        r"[^a-z0-9'\s-]",
         " ",
         text,
     )
 
-    # Remove repeated whitespace.
+    # Normalise whitespace.
     text = re.sub(
         r"\s+",
         " ",
         text,
-    )
+    ).strip()
 
-    return text.strip()
+    return text
 
 
-# ================================================================
-# TOKENISATION
-# ================================================================
+# ---------------------------------------------------------------------------
+# Tokenisation
+# ---------------------------------------------------------------------------
 
 def tokenize(text: str) -> List[str]:
     """
-    Convert cleaned text into simple word tokens.
+    Tokenise cleaned review text into simple word tokens.
     """
-
     return re.findall(
         r"[a-z]+",
-        text,
+        text.lower(),
     )
 
 
-# ================================================================
-# MULTI-WORD ASPECT EXTRACTION
-# ================================================================
+# ---------------------------------------------------------------------------
+# Multi-Word Aspect Extraction
+# ---------------------------------------------------------------------------
 
 def extract_known_phrases(
-    text: str,
+    tokens: List[str],
 ) -> List[str]:
     """
-    Extract only explicitly recognised multi-word aspects.
+    Extract only recognised high-confidence multi-word aspects.
     """
-
-    tokens = tokenize(text)
-
     aspects = []
 
-    for index in range(len(tokens) - 1):
+    token_text = " ".join(tokens)
 
-        phrase = (
-            f"{tokens[index]} "
-            f"{tokens[index + 1]}"
-        )
-
-        if phrase in KNOWN_ASPECT_PHRASES:
-
-            if phrase not in aspects:
-                aspects.append(
-                    phrase
-                )
+    for phrase in sorted(
+        KNOWN_ASPECT_PHRASES,
+        key=lambda value: len(value.split()),
+        reverse=True,
+    ):
+        if re.search(
+            rf"\b{re.escape(phrase)}\b",
+            token_text,
+        ):
+            aspects.append(phrase)
 
     return aspects
 
 
-# ================================================================
-# SINGLE-WORD ASPECT EXTRACTION
-# ================================================================
+# ---------------------------------------------------------------------------
+# Context-Aware Single-Word Aspect Extraction
+# ---------------------------------------------------------------------------
+
+def is_contextually_valid_aspect(
+    tokens: List[str],
+    index: int,
+    aspect: str,
+) -> bool:
+    """
+    Determine whether a single-word aspect is being used as an aspect
+    rather than as an ordinary word or verb.
+    """
+
+    # ---------------------------------------------------------------
+    # Special handling for "watch"
+    # ---------------------------------------------------------------
+    #
+    # "watch" can represent a physical product:
+    #
+    #     "The watch has good straps."
+    #
+    # But it can also be a verb:
+    #
+    #     "I watch this movie."
+    #
+    # The surrounding words help distinguish these cases.
+    # ---------------------------------------------------------------
+
+    if aspect == "watch":
+
+        previous_word = (
+            tokens[index - 1]
+            if index > 0
+            else ""
+        )
+
+        next_word = (
+            tokens[index + 1]
+            if index + 1 < len(tokens)
+            else ""
+        )
+
+        # Common verb constructions.
+        if next_word in {
+            "this",
+            "that",
+            "the",
+            "a",
+            "an",
+            "movies",
+            "movie",
+            "videos",
+            "video",
+        }:
+            return False
+
+        if previous_word in {
+            "i",
+            "we",
+            "you",
+            "they",
+            "he",
+            "she",
+            "to",
+            "can",
+            "will",
+            "would",
+            "like",
+            "love",
+        }:
+            return False
+
+    return True
+
 
 def extract_single_word_aspects(
     tokens: List[str],
-    phrase_aspects: List[str],
+    protected_phrase_words: set,
 ) -> List[str]:
     """
-    Extract known single-word aspects.
-
-    Words already belonging to a recognised multi-word
-    aspect are not returned separately.
-
-    Example:
-
-        battery life
-
-    returns:
-
-        battery life
-
-    rather than:
-
-        battery
-        life
+    Extract recognised single-word aspects from the controlled vocabulary.
     """
-
-    # Store every word that belongs to a recognised phrase.
-    protected_words = set()
-
-    for phrase in phrase_aspects:
-
-        for word in phrase.split():
-
-            protected_words.add(
-                word
-            )
-
     aspects = []
 
-    for token in tokens:
+    for index, token in enumerate(tokens):
 
-        # Skip words already represented by a phrase.
-        if token in protected_words:
+        if token not in KNOWN_ASPECTS:
             continue
 
-        # Extract only explicitly known aspects.
-        if token in KNOWN_ASPECTS:
+        # Do not extract words that are already part of a recognised
+        # multi-word aspect.
+        if token in protected_phrase_words:
+            continue
 
-            if token not in aspects:
+        if not is_contextually_valid_aspect(
+            tokens=tokens,
+            index=index,
+            aspect=token,
+        ):
+            continue
 
-                aspects.append(
-                    token
-                )
+        aspects.append(token)
 
     return aspects
 
 
-# ================================================================
-# CONTEXTUAL FALSE-POSITIVE FILTER
-# ================================================================
+# ---------------------------------------------------------------------------
+# Duplicate and Redundancy Removal
+# ---------------------------------------------------------------------------
 
-def remove_false_positive_aspects(
-    aspects: List[str],
-    text: str,
-) -> List[str]:
-    """
-    Remove known contextual false positives.
-
-    This is intentionally small and conservative.
-
-    Example:
-
-        "in case you need it"
-
-    should not produce:
-
-        case
-    """
-
-    tokens = tokenize(text)
-
-    final_aspects = []
-
-    for aspect in aspects:
-
-        # --------------------------------------------------------
-        # "case" is ambiguous.
-        #
-        # We keep "case" as a possible product aspect only when
-        # it does not occur in the phrase "in case".
-        # --------------------------------------------------------
-
-        if aspect == "case":
-
-            for index, token in enumerate(tokens):
-
-                if token != "case":
-                    continue
-
-                if (
-                    index > 0
-                    and tokens[index - 1] == "in"
-                ):
-                    continue
-
-            # Since "case" is not currently part of the
-            # conservative KNOWN_ASPECTS vocabulary, this
-            # condition normally does not execute.
-            continue
-
-        # --------------------------------------------------------
-        # Avoid "alarm" duplicates when "alarms" is present.
-        # --------------------------------------------------------
-
-        if (
-            aspect == "alarm"
-            and "alarms" in aspects
-        ):
-            continue
-
-        # --------------------------------------------------------
-        # Avoid singular/plural duplicates.
-        # --------------------------------------------------------
-
-        if (
-            aspect.endswith("s")
-            and aspect[:-1] in aspects
-        ):
-            continue
-
-        if (
-            aspect + "s" in aspects
-        ):
-            continue
-
-        final_aspects.append(
-            aspect
-        )
-
-    return final_aspects
-
-
-# ================================================================
-# REMOVE REDUNDANT COMPONENT ASPECTS
-# ================================================================
-
-def remove_component_aspects(
+def remove_redundant_aspects(
     aspects: List[str],
 ) -> List[str]:
     """
-    Remove single-word components when they are already
-    represented by a more specific multi-word aspect.
+    Remove duplicate and unnecessary component aspects.
 
     Example:
-
         battery life
         battery
 
@@ -419,222 +415,170 @@ def remove_component_aspects(
 
         battery life
     """
-
-    multi_word_aspects = [
-        aspect
-        for aspect in aspects
-        if " " in aspect
-    ]
-
-    final_aspects = []
+    unique_aspects = []
 
     for aspect in aspects:
+        if aspect not in unique_aspects:
+            unique_aspects.append(aspect)
 
-        # If it is already a multi-word aspect, keep it.
-        if " " in aspect:
+    # Prefer multi-word aspects over their single-word components.
+    final_aspects = []
 
-            if aspect not in final_aspects:
+    for aspect in unique_aspects:
 
-                final_aspects.append(
-                    aspect
-                )
+        is_component = False
 
-            continue
+        for other_aspect in unique_aspects:
 
-        # Check whether this single word is part of a
-        # recognised multi-word aspect.
-        belongs_to_phrase = False
+            if aspect == other_aspect:
+                continue
 
-        for phrase in multi_word_aspects:
+            other_words = set(
+                other_aspect.split()
+            )
 
-            if aspect in phrase.split():
-
-                belongs_to_phrase = True
-
+            if (
+                " " not in aspect
+                and aspect in other_words
+            ):
+                is_component = True
                 break
 
-        if belongs_to_phrase:
-            continue
-
-        if aspect not in final_aspects:
-
-            final_aspects.append(
-                aspect
-            )
+        if not is_component:
+            final_aspects.append(aspect)
 
     return final_aspects
 
 
-# ================================================================
-# MAIN ASPECT EXTRACTION FUNCTION
-# ================================================================
+# ---------------------------------------------------------------------------
+# Main Aspect Extraction Function
+# ---------------------------------------------------------------------------
 
 def extract_aspects(
     text: str,
 ) -> List[str]:
     """
-    Extract product aspects from an e-commerce review.
+    Extract recognised aspects from a review.
 
-    The method uses a conservative rule-based approach:
+    The process is:
 
-        1. Clean the review.
-        2. Tokenise the review.
-        3. Detect predefined multi-word aspects.
-        4. Detect predefined single-word aspects.
-        5. Remove duplicate/component aspects.
-        6. Return the final aspect list.
+        1. Clean text
+        2. Tokenise text
+        3. Extract known multi-word aspects
+        4. Extract known single-word aspects
+        5. Remove redundant aspects
 
-    The extractor intentionally avoids generating arbitrary
-    neighbouring word combinations. This reduces false positives.
+    The approach is intentionally conservative to reduce false-positive
+    aspect extraction.
     """
-
-    # ------------------------------------------------------------
-    # Step 1: Clean text
-    # ------------------------------------------------------------
-
-    cleaned_text = clean_text(
-        text
-    )
+    cleaned_text = clean_text(text)
 
     if not cleaned_text:
         return []
 
-    # ------------------------------------------------------------
-    # Step 2: Tokenise
-    # ------------------------------------------------------------
-
-    tokens = tokenize(
-        cleaned_text
-    )
+    tokens = tokenize(cleaned_text)
 
     if not tokens:
         return []
 
-    # ------------------------------------------------------------
-    # Step 3: Extract known multi-word aspects
-    # ------------------------------------------------------------
+    # ---------------------------------------------------------------
+    # Extract multi-word aspects first.
+    # ---------------------------------------------------------------
 
-    phrase_aspects = (
-        extract_known_phrases(
-            cleaned_text
-        )
+    phrase_aspects = extract_known_phrases(
+        tokens
     )
 
-    # ------------------------------------------------------------
-    # Step 4: Extract known single-word aspects
-    # ------------------------------------------------------------
+    # Keep track of words already used by recognised phrases.
+    protected_phrase_words = set()
 
-    single_word_aspects = (
-        extract_single_word_aspects(
-            tokens,
-            phrase_aspects,
+    for phrase in phrase_aspects:
+        protected_phrase_words.update(
+            phrase.split()
         )
+
+    # ---------------------------------------------------------------
+    # Extract single-word aspects.
+    # ---------------------------------------------------------------
+
+    single_word_aspects = extract_single_word_aspects(
+        tokens=tokens,
+        protected_phrase_words=protected_phrase_words,
     )
 
-    # ------------------------------------------------------------
-    # Step 5: Combine
-    # ------------------------------------------------------------
+    # ---------------------------------------------------------------
+    # Combine results.
+    # ---------------------------------------------------------------
 
     aspects = (
         phrase_aspects
         + single_word_aspects
     )
 
-    # ------------------------------------------------------------
-    # Step 6: Remove false positives
-    # ------------------------------------------------------------
+    # ---------------------------------------------------------------
+    # Remove duplicates/redundancy.
+    # ---------------------------------------------------------------
 
-    aspects = (
-        remove_false_positive_aspects(
-            aspects,
-            cleaned_text,
-        )
+    return remove_redundant_aspects(
+        aspects
     )
 
-    # ------------------------------------------------------------
-    # Step 7: Remove redundant components
-    # ------------------------------------------------------------
 
-    aspects = (
-        remove_component_aspects(
-            aspects
-        )
-    )
-
-    return aspects
-
-
-# ================================================================
-# CONTROLLED TEST
-# ================================================================
+# ---------------------------------------------------------------------------
+# Simple Manual Test
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
 
-    sample_reviews = [
-
-        "The battery life is excellent and the screen is very clear.",
-
-        "The sound quality is amazing but the price is high.",
-
-        "Delivery was fast and the packaging was good.",
-
-        "The camera quality is excellent but battery life is poor.",
-
-        "I purchased this polo shirt for my husband and it fits very well.",
-
-        "My husband and I are having fun with our new pizza cutter.",
-
-        "I have been a fan of tarot cards for many years and this book helped me learn even more about reading the cards.",
-
-        "The watch has durable buttons and comfortable straps.",
-
-        "The price is high but the product quality is excellent.",
-
-        "The watch has three alarms and common settings.",
-
-        "The cream provides smoother skin and causes no odd reactions.",
-
-        "I have stickers and flowers on different walls with my own design.",
+    test_reviews = [
+        (
+            "The battery life is excellent and "
+            "the screen is very clear."
+        ),
+        (
+            "The sound quality is amazing but "
+            "the price is high."
+        ),
+        (
+            "Delivery was fast and the packaging was good."
+        ),
+        (
+            "I purchased this polo shirt for my husband "
+            "and it fits very well."
+        ),
+        (
+            "This charger brought back my batteries "
+            "and the display is excellent."
+        ),
+        (
+            "I have watched this movie and it was amazing."
+        ),
+        (
+            "This is the best hand grater I have ever owned."
+        ),
     ]
 
-    print("=" * 80)
+    print("=" * 70)
     print("ASPECT EXTRACTION TEST")
-    print("=" * 80)
+    print("=" * 70)
 
-    for number, review in enumerate(
-        sample_reviews,
+    for index, review in enumerate(
+        test_reviews,
         start=1,
     ):
-
-        print(
-            f"\nREVIEW {number}"
-        )
-
-        print("-" * 80)
-
-        print("Original:")
+        print(f"\nReview {index}:")
         print(review)
 
-        aspects = extract_aspects(
-            review
-        )
+        aspects = extract_aspects(review)
 
-        print("\nExtracted aspects:")
+        print("Aspects:")
 
-        if aspects:
-
-            for aspect in aspects:
-
-                print(
-                    f"  - {aspect}"
-                )
-
+        if not aspects:
+            print("  No aspects detected.")
         else:
+            for aspect in aspects:
+                print(f"  - {aspect}")
 
-            print(
-                "  No aspects detected."
-            )
-
-    print("\n" + "=" * 80)
+    print("\n" + "=" * 70)
     print("TEST COMPLETED")
-    print("=" * 80)
+    print("=" * 70)
