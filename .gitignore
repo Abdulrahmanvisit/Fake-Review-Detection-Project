@@ -1,0 +1,57 @@
+# Python virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# NLTK local data
+nltk_data/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Machine learning models
+models/*.pkl
+models/*.joblib
+models/*.pickle
+
+# Dataset files
+data/original/*
+data/processed/*
+
+# Node.js
+node_modules/
+
+# Next.js
+.next/
+out/
+
+# Vite
+dist/
+
+# Build files
+build/
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE/editor files
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# OS files
+.DS_Store
+Thumbs.db
