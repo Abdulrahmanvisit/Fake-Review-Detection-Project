@@ -1,3 +1,5 @@
+import math
+from functools import lru_cache
 from pathlib import Path
 
 import joblib
@@ -8,6 +10,7 @@ from backend.app.ml.train_model import (
     prepare_additional_features,
 )
 from backend.app.nlp.aspect_extraction import extract_aspects
+from backend.app.nlp.preprocessing import preprocess_review
 from backend.app.nlp.sentiment import classify_review_aspects
 
 
@@ -19,6 +22,7 @@ FEATURE_ENGINEER_PATH = (
 )
 
 
+@lru_cache(maxsize=1)
 def load_prediction_components():
     """Load the trained SVM model and feature engineer."""
 
@@ -64,9 +68,26 @@ def predict_review(
             "Review text cannot be empty."
         )
 
-    if rating < 0 or rating > 5:
+    if isinstance(rating, bool):
+        raise ValueError(
+            "Rating must be a number between 0 and 5."
+        )
+
+    try:
+        rating = float(rating)
+    except (TypeError, ValueError):
+        raise ValueError(
+            "Rating must be a number between 0 and 5."
+        ) from None
+
+    if not math.isfinite(rating) or rating < 0 or rating > 5:
         raise ValueError(
             "Rating must be between 0 and 5."
+        )
+
+    if not isinstance(verified_purchase, str):
+        raise ValueError(
+            "verified_purchase must be 'Y' or 'N'."
         )
 
     verified_purchase = (
@@ -77,6 +98,10 @@ def predict_review(
         raise ValueError(
             "verified_purchase must be 'Y' or 'N'."
         )
+
+    preprocessed_review = preprocess_review(
+        review_text
+    )
 
     # ---------------------------------------------------------------
     # 1. Extract aspects
@@ -103,6 +128,12 @@ def predict_review(
         [
             {
                 "REVIEW_TEXT": review_text,
+                "CLEANED_TEXT": preprocessed_review[
+                    "cleaned_text"
+                ],
+                "PROCESSED_TEXT": preprocessed_review[
+                    "processed_text"
+                ],
                 "RATING": rating,
                 "VERIFIED_PURCHASE": verified_purchase,
             }

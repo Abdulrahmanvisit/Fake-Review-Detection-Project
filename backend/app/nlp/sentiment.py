@@ -1,3 +1,4 @@
+import html
 import re
 from typing import Dict, List
 
@@ -87,6 +88,20 @@ DIMINISHERS = {
     "somewhat": 0.5,
     "fairly": 0.75,
     "quite": 0.75,
+}
+
+CLAUSE_BOUNDARIES = {
+    ".",
+    "!",
+    "?",
+    ";",
+    ",",
+    "but",
+    "however",
+    "although",
+    "though",
+    "yet",
+    "whereas",
 }
 
 
@@ -223,6 +238,51 @@ ASPECT_CONTEXT_RULES = {
             "unhelpful",
         },
     },
+    "battery": {
+        "positive": {
+            "good",
+            "excellent",
+            "great",
+            "long",
+            "last",
+            "lasts",
+            "lasting",
+            "work",
+            "works",
+            "worked",
+            "working",
+        },
+        "negative": {
+            "short",
+            "poor",
+            "weak",
+            "stopped",
+            "failed",
+            "dead",
+            "drains",
+            "drained",
+            "dies",
+            "dying",
+        },
+    },
+    "battery life": {
+        "positive": {
+            "good",
+            "excellent",
+            "great",
+            "long",
+            "lasts",
+            "lasting",
+        },
+        "negative": {
+            "short",
+            "poor",
+            "weak",
+            "brief",
+            "drains",
+            "drained",
+        },
+    },
 }
 
 
@@ -237,6 +297,9 @@ def normalise_text(text: str) -> str:
     if not isinstance(text, str):
         return ""
 
+    text = html.unescape(text)
+    text = re.sub(r"<[^>]*>", " ", text)
+    text = text.replace("’", "'").replace("‘", "'")
     text = text.lower()
     text = re.sub(r"\s+", " ", text).strip()
 
@@ -245,9 +308,19 @@ def normalise_text(text: str) -> str:
 
 def tokenise(text: str) -> List[str]:
     """
-    Convert text into simple word tokens.
+    Convert text into Unicode-aware word and clause-boundary tokens.
     """
-    return re.findall(r"[a-z]+", text.lower())
+    text = normalise_text(text)
+    text = re.sub(r"\bwon't\b", "will not", text)
+    text = re.sub(r"\bcan't\b", "can not", text)
+    text = re.sub(r"\bshan't\b", "shall not", text)
+    text = re.sub(r"\b([a-z]+)n't\b", r"\1 not", text)
+
+    return re.findall(
+        r"[^\W\d_]+|[.!?;,]",
+        text,
+        flags=re.UNICODE,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -329,17 +402,26 @@ def get_context_window(
     aspect_tokens = tokenise(aspect)
 
     aspect_start = positions[0]
-    aspect_end = (
-        aspect_start + len(aspect_tokens)
-    )
+    aspect_end = aspect_start + len(aspect_tokens)
+
+    clause_start = 0
+    for index, token in enumerate(tokens[:aspect_start]):
+        if token in CLAUSE_BOUNDARIES:
+            clause_start = index + 1
+
+    clause_end = len(tokens)
+    for index in range(aspect_end, len(tokens)):
+        if tokens[index] in CLAUSE_BOUNDARIES:
+            clause_end = index
+            break
 
     start = max(
-        0,
+        clause_start,
         aspect_start - window_size,
     )
 
     end = min(
-        len(tokens),
+        clause_end,
         aspect_end + window_size,
     )
 
@@ -350,201 +432,120 @@ def get_context_window(
 # Sentiment Scoring
 # ---------------------------------------------------------------------------
 
-def score_context(
-    context: List[str],
+def get_context_windows(
+    tokens: List[str],
     aspect: str,
-) -> float:
-    """
-    Calculate the sentiment score associated with an aspect.
+    window_size: int = 5,
+) -> List[List[str]]:
+    """Return an independent local context for each aspect occurrence."""
+    positions = find_aspect_positions(tokens, aspect)
+    aspect_tokens = tokenise(aspect)
+    contexts = []
 
-    The classifier gives priority to sentiment words closest to the target
-    aspect. This prevents sentiment belonging to another aspect from
-    incorrectly influencing the current aspect.
+    for aspect_start in positions:
+        aspect_end = aspect_start + len(aspect_tokens)
+        clause_start = 0
+        for index, token in enumerate(tokens[:aspect_start]):
+            if token in CLAUSE_BOUNDARIES:
+                clause_start = index + 1
 
-    Positive score  -> Positive sentiment
-    Negative score  -> Negative sentiment
-    Zero             -> Neutral sentiment
-    """
+        clause_end = len(tokens)
+        for index in range(aspect_end, len(tokens)):
+            if tokens[index] in CLAUSE_BOUNDARIES:
+                clause_end = index
+                break
+
+        start = max(clause_start, aspect_start - window_size)
+        end = min(clause_end, aspect_end + window_size)
+        contexts.append(tokens[start:end])
+
+    return contexts
+
+
+def score_context(context: List[str], aspect: str) -> float:
+    """Score the closest sentiment evidence within one aspect context."""
     if not context:
         return 0.0
 
     aspect_name = aspect.lower()
     aspect_tokens = tokenise(aspect)
-
-    # Find the target aspect inside the local context.
-    aspect_positions = find_aspect_positions(
-        tokens=context,
-        aspect=aspect,
-    )
-
+    aspect_positions = find_aspect_positions(context, aspect)
     if not aspect_positions:
         return 0.0
 
     aspect_start = aspect_positions[0]
-
-    aspect_end = (
-        aspect_start + len(aspect_tokens) - 1
-    )
-
-    aspect_rules = ASPECT_CONTEXT_RULES.get(
-        aspect_name
-    )
+    aspect_end = aspect_start + len(aspect_tokens) - 1
+    aspect_rules = ASPECT_CONTEXT_RULES.get(aspect_name)
+    if aspect_rules is None and " " in aspect_name:
+        aspect_rules = ASPECT_CONTEXT_RULES.get(aspect_name.rsplit(" ", 1)[-1])
 
     sentiment_candidates = []
-
     for index, word in enumerate(context):
-
         word_score = 0.0
-
-        # ---------------------------------------------------------------
-        # General sentiment lexicon
-        # ---------------------------------------------------------------
-
         if word in POSITIVE_WORDS:
             word_score = 1.0
-
         elif word in NEGATIVE_WORDS:
             word_score = -1.0
 
-        # ---------------------------------------------------------------
-        # Aspect-specific sentiment rules
-        # ---------------------------------------------------------------
-
         if aspect_rules:
-
             if word in aspect_rules["positive"]:
                 word_score = 1.0
-
             elif word in aspect_rules["negative"]:
                 word_score = -1.0
 
-        # Ignore words with no sentiment evidence.
         if word_score == 0:
             continue
 
-        # ---------------------------------------------------------------
-        # Distance from the target aspect
-        # ---------------------------------------------------------------
-
         if index < aspect_start:
-
-            distance = (
-                aspect_start - index
-            )
-
+            distance = aspect_start - index
         elif index > aspect_end:
-
-            distance = (
-                index - aspect_end
-            )
-
+            distance = index - aspect_end
         else:
-
             distance = 0
 
-        # ---------------------------------------------------------------
-        # Negation handling
-        # ---------------------------------------------------------------
-
-        previous_words = context[
-            max(0, index - 3):index
-        ]
-
-        negation_found = any(
-            previous_word in NEGATION_WORDS
-            for previous_word in previous_words
-        )
-
-        if negation_found:
+        previous_words = context[max(0, index - 3):index]
+        if any(previous_word in NEGATION_WORDS for previous_word in previous_words):
             word_score *= -1
 
-        # ---------------------------------------------------------------
-        # Intensifier and diminisher handling
-        # ---------------------------------------------------------------
-
-        multiplier = 1.0
-
-        previous_word = (
-            context[index - 1]
-            if index > 0
-            else ""
-        )
-
+        previous_word = context[index - 1] if index > 0 else ""
         if previous_word in INTENSIFIERS:
-
-            multiplier = INTENSIFIERS[
-                previous_word
-            ]
-
+            multiplier = INTENSIFIERS[previous_word]
         elif previous_word in DIMINISHERS:
-
-            multiplier = DIMINISHERS[
-                previous_word
-            ]
-
-        adjusted_score = (
-            word_score * multiplier
-        )
-
-        # ---------------------------------------------------------------
-        # Store the sentiment evidence
-        # ---------------------------------------------------------------
+            multiplier = DIMINISHERS[previous_word]
+        else:
+            multiplier = 1.0
 
         sentiment_candidates.append(
             {
-                "score": adjusted_score,
+                "score": word_score * multiplier,
                 "distance": distance,
                 "aspect_specific": (
                     aspect_rules is not None
-                    and (
-                        word
-                        in aspect_rules["positive"]
-                        or word
-                        in aspect_rules["negative"]
-                    )
+                    and word in (aspect_rules["positive"] | aspect_rules["negative"])
                 ),
             }
         )
 
-    # No sentiment evidence was found.
     if not sentiment_candidates:
         return 0.0
 
-    # ---------------------------------------------------------------
-    # Select the closest sentiment evidence.
-    # ---------------------------------------------------------------
-
     nearest_distance = min(
-        candidate["distance"]
-        for candidate in sentiment_candidates
+        candidate["distance"] for candidate in sentiment_candidates
     )
-
     nearest_candidates = [
         candidate
         for candidate in sentiment_candidates
-        if candidate["distance"]
-        == nearest_distance
+        if candidate["distance"] == nearest_distance
     ]
-
-    # ---------------------------------------------------------------
-    # If there is a tie, prefer aspect-specific evidence.
-    # ---------------------------------------------------------------
-
     aspect_specific_candidates = [
         candidate
         for candidate in nearest_candidates
         if candidate["aspect_specific"]
     ]
-
     if aspect_specific_candidates:
-        nearest_candidates = (
-            aspect_specific_candidates
-        )
+        nearest_candidates = aspect_specific_candidates
 
-    return sum(
-        candidate["score"]
-        for candidate in nearest_candidates
-    )
+    return sum(candidate["score"] for candidate in nearest_candidates)
 
 
 # ---------------------------------------------------------------------------
@@ -582,7 +583,6 @@ def classify_aspect_sentiment(
         local context
     """
     text = normalise_text(review_text)
-
     tokens = tokenise(text)
 
     if not aspect:
@@ -593,12 +593,8 @@ def classify_aspect_sentiment(
             "context": [],
         }
 
-    context = get_context_window(
-        tokens=tokens,
-        aspect=aspect,
-    )
-
-    if not context:
+    contexts = get_context_windows(tokens, aspect)
+    if not contexts:
         return {
             "aspect": aspect,
             "sentiment": "Neutral",
@@ -606,18 +602,17 @@ def classify_aspect_sentiment(
             "context": [],
         }
 
-    score = score_context(
-        context=context,
-        aspect=aspect,
-    )
-
-    sentiment = classify_score(score)
+    occurrence_scores = [
+        score_context(context, aspect)
+        for context in contexts
+    ]
+    score = sum(occurrence_scores) / len(occurrence_scores)
 
     return {
         "aspect": aspect,
-        "sentiment": sentiment,
+        "sentiment": classify_score(score),
         "score": round(score, 3),
-        "context": context,
+        "context": contexts[0],
     }
 
 

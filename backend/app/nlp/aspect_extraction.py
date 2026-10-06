@@ -1,3 +1,4 @@
+import html
 import re
 from typing import List
 
@@ -206,36 +207,27 @@ def clean_text(text: str) -> str:
     if not isinstance(text, str):
         return ""
 
+    # Decode entities first so encoded markup and punctuation are handled
+    # consistently with their literal forms.
+    text = html.unescape(text)
+
     # Remove HTML tags.
     text = re.sub(
-        r"<[^>]+>",
+        r"<[^>]*>",
         " ",
         text,
     )
 
-    # Decode common HTML entities represented in review text.
-    text = text.replace(
-        "&#34;",
-        '"',
-    )
-
-    text = text.replace(
-        "&quot;",
-        '"',
-    )
-
-    text = text.replace(
-        "&amp;",
-        "and",
-    )
+    text = text.replace("’", "'").replace("‘", "'")
 
     text = text.lower()
 
-    # Keep letters, numbers, spaces and apostrophes.
+    # Keep Unicode letters, numbers, spaces and apostrophes.
     text = re.sub(
-        r"[^a-z0-9'\s-]",
+        r"[^\w'\s-]",
         " ",
         text,
+        flags=re.UNICODE,
     )
 
     # Normalise whitespace.
@@ -257,8 +249,9 @@ def tokenize(text: str) -> List[str]:
     Tokenise cleaned review text into simple word tokens.
     """
     return re.findall(
-        r"[a-z]+",
+        r"[^\W\d_]+",
         text.lower(),
+        flags=re.UNICODE,
     )
 
 

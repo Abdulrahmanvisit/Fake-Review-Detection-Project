@@ -88,6 +88,42 @@ TEST_CASES = [
             "Positive",
         ],
     },
+    {
+        "review": "The battery never worked.",
+        "aspects": ["battery"],
+        "expected": ["Negative"],
+    },
+    {
+        "review": "The battery isn't good.",
+        "aspects": ["battery"],
+        "expected": ["Negative"],
+    },
+    {
+        "review": "The battery lasts a long time.",
+        "aspects": ["battery"],
+        "expected": ["Positive"],
+    },
+    {
+        "review": (
+            "The screen quality is excellent, "
+            "but the battery is poor."
+        ),
+        "aspects": ["screen quality", "battery"],
+        "expected": ["Positive", "Negative"],
+    },
+    {
+        "review": "The screen is excellent. The battery is okay.",
+        "aspects": ["screen", "battery"],
+        "expected": ["Positive", "Neutral"],
+    },
+    {
+        "review": (
+            "The battery is excellent at first, "
+            "but the battery is poor now."
+        ),
+        "aspects": ["battery"],
+        "expected": ["Neutral"],
+    },
 ]
 
 
